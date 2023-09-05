@@ -19,8 +19,13 @@ from ..sources.constants import to_cgs_at_10pc as to_cgs
 from ..sources.constants import cosmo, lightspeed, ckms, jansky_cgs
 from ..utils.smoothing import smoothspec
 
+try:
+    import extinction
+except Exception:
+    print('extinction module cannot be loaded: PolySpecScreenModel is not available')
 
-__all__ = ["SpecModel", "PolySpecModel", "SplineSpecModel",
+
+__all__ = ["SpecModel", "PolySpecModel", "PolySpecScreenModel", "SplineSpecModel",
            "LineSpecModel", "AGNSpecModel",
            "SedModel", "PolySedModel", "PolyFitModel"]
 
@@ -700,6 +705,109 @@ class PolySpecModel(SpecModel):
             poly = np.zeros_like(self._outwave)
 
         return (1.0 + poly)
+
+
+class PolySpecScreenModel(PolySpecModel):
+
+    def predict(self, theta, obs=None, sps=None, sigma_spec=None, **extras):
+        """Given a ``theta`` vector, generate a spectrum, photometry, and any
+        extras (e.g. stellar mass), including any calibration effects.
+
+        :param theta:
+            ndarray of parameter values, of shape ``(ndim,)``
+
+        :param obs:
+            An observation dictionary, containing the output wavelength array,
+            the photometric filter lists, and the observed fluxes and
+            uncertainties thereon.  Assumed to be the result of
+            :py:func:`utils.obsutils.rectify_obs`
+
+        :param sps:
+            An `sps` object to be used in the model generation.  It must have
+            the :py:func:`get_galaxy_spectrum` method defined.
+
+        :param sigma_spec: (optional)
+            The covariance matrix for the spectral noise. It is only used for
+            emission line marginalization.
+
+        :returns spec:
+            The model spectrum for these parameters, at the wavelengths
+            specified by ``obs['wavelength']``, including multiplication by the
+            calibration vector.  Units of maggies
+
+        :returns phot:
+            The model photometry for these parameters, for the filters
+            specified in ``obs['filters']``.  Units of maggies.
+
+        :returns extras:
+            Any extra aspects of the model that are returned.  Typically this
+            will be `mfrac` the ratio of the surviving stellar mass to the
+            stellar mass formed.
+        """
+        # generate and cache model spectrum and info
+        self.set_parameters(theta)
+        self._wave, self._spec, self._mfrac = sps.get_galaxy_spectrum(**self.params)
+        self._zred = self.params.get('zred', 0)
+        self._eline_wave, self._eline_lum = sps.get_galaxy_elines()
+
+        # apply additional extinction (foreground screen)
+        # Yukei Murakami @JHU, 2023
+        # 1. redshift spec to the foreground screen's location
+        # 2. apply extinction to both continuum and emission lines
+        # 3. store screened flux back in attributes
+        # new parameters:
+        #   - AV_screen
+        #   - RV_screen
+        #   - zred_screen (must be provided even when 0)
+        #   - screen_dustlaw ('fitzpatrick99','')
+
+        if 'zred_screen' in self.params.keys():
+            dust_law = self.params.get('screen_dustlaw', 0)[0]
+            zred_source = self.params.get('zred', 0) # redshift of the source galaxy
+            zred_screen = self.params.get('zred_screen', 0) # redshift of the screening dust
+            AV_screen = np.squeeze(theta[self.theta_index['AV_screen']])
+            RV_screen = np.squeeze(theta[self.theta_index['RV_screen']])
+
+            # TODO: Currently this assumes zred_screen is 0 or negligible.
+            # MODIFY THIS to account for nonzero zred_screen 
+            zred_screen_toolarge_msg = 'Currently zred_screen is assumed to be negligible!'
+            assert zred_screen < 0.01, NotImplementedError(zred_screen_toolarge_msg)
+            zred_at_screen = zred_source # CAUTION!!
+
+            # select dust law
+            dustlaw_functions = {
+                'fitzpatrick99':extinction.fitzpatrick99,
+                'calzetti00': extinction.calzetti00
+                }
+            dustlaw_func = dustlaw_functions[dust_law]
+
+            # apply extinction -- continuum
+            wave_at_screen = self._wave * (1 + zred_at_screen)
+            calzetti = dustlaw_func(wave_at_screen,AV_screen,RV_screen,unit='aa')
+            spec_screened = extinction.apply(calzetti,self._spec)
+            self._spec = spec_screened
+
+
+            # apply extinction -- em lines
+            _eline_wave_at_screen = self._eline_wave * (1 + zred_at_screen)
+            calzetti = dustlaw_func(_eline_wave_at_screen,AV_screen,RV_screen,unit='aa')
+            _eline_lum_screened = extinction.apply(calzetti,self._eline_lum)
+            self._eline_lum = _eline_lum_screened
+
+
+
+        # Flux normalize
+        self._norm_spec = self._spec * self.flux_norm()
+
+        # generate spectrum and photometry for likelihood
+        # predict_spec should be called before predict_phot
+        # because in principle it can modify the emission line parameters
+        # and also needs some things done in 'cache_eline_parameters`
+        # especially _ewave_obs and _use_elines
+        spec = self.predict_spec(obs, sigma_spec=sigma_spec)
+        phot = self.predict_phot(obs.get('filters', None))
+
+        return spec, phot, self._mfrac
 
 
 class SplineSpecModel(SpecModel):

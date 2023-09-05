@@ -6,10 +6,10 @@ specifications.
 """
 
 from .sedmodel import ProspectorParams, SedModel, SpecModel
-from .sedmodel import PolySpecModel, SplineSpecModel
+from .sedmodel import PolySpecModel, PolySpecScreenModel, SplineSpecModel
 from .sedmodel import AGNSpecModel, LineSpecModel
 
 __all__ = ["ProspectorParams", "SpecModel",
-           "PolySpecModel", "SplineSpecModel",
+           "PolySpecModel", "PolySpecScreenModel", "SplineSpecModel",
            "LineSpecModel", "AGNSpecModel",
            "SedModel"]
