@@ -708,6 +708,53 @@ class PolySpecModel(SpecModel):
 
 
 class PolySpecScreenModel(PolySpecModel):
+    
+    def predict_phot(self, filters):
+        """Generate a prediction for the observed photometry.  This method assumes
+        that the parameters have been set and that the following attributes are
+        present and correct:
+          + ``_wave`` - The SPS restframe wavelength array
+          + ``_zred`` - Redshift
+          + ``_norm_spec`` - Observed frame spectral fluxes, in units of maggies.
+          + ``_ewave_obs`` and ``_eline_lum`` - emission line parameters from
+            the SPS model
+
+        :param filters:
+            Instance of :py:class:`sedpy.observate.FilterSet` or list of
+            :py:class:`sedpy.observate.Filter` objects. If there is no
+            photometry, ``None`` should be supplied.
+
+        :returns phot:
+            Observed frame photometry of the model SED through the given filters.
+            ndarray of shape ``(len(filters),)``, in units of maggies.
+            If ``filters`` is None, this returns 0.0
+        """
+        if filters is None:
+            return 0.0
+
+        # generate photometry w/o emission lines
+        obs_wave = self.observed_wave(self._wave, do_wavecal=False)
+        flambda = self._norm_spec * lightspeed / obs_wave**2 * (3631*jansky_cgs)
+        mags = np.atleast_1d(getSED(obs_wave, flambda, filters))
+        
+        ### zero point offset between HST and JWST
+        if 'zp_offset' in self.params.keys():
+            filters_to_offset = self.params.get('filters_to_offset', []) # filters to apply offset
+            zp_offset = np.squeeze(theta[self.theta_index['zp_offset']])
+
+            for i,filt in enumerate(filters):
+                if filt.name in filters_to_offset:
+                    mags[i] = mags[i] + zp_offset
+            
+        phot = 10**(-0.4 * mags)
+        # TODO: below is faster for sedpy > 0.2.0
+        #phot = np.atleast_1d(getSED(obs_wave, flambda, filters, linear_flux=True))
+
+        # generate emission-line photometry
+        if (self._want_lines & self._need_lines):
+            phot += self.nebline_photometry(filters)
+
+        return phot
 
     def predict(self, theta, obs=None, sps=None, sigma_spec=None, **extras):
         """Given a ``theta`` vector, generate a spectrum, photometry, and any
@@ -793,8 +840,6 @@ class PolySpecScreenModel(PolySpecModel):
             calzetti = dustlaw_func(_eline_wave_at_screen,AV_screen,RV_screen,unit='aa')
             _eline_lum_screened = extinction.apply(calzetti,self._eline_lum)
             self._eline_lum = _eline_lum_screened
-
-
 
         # Flux normalize
         self._norm_spec = self._spec * self.flux_norm()
