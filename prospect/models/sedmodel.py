@@ -740,7 +740,7 @@ class PolySpecScreenModel(PolySpecModel):
         ### zero point offset between HST and JWST
         if 'zp_offset' in self.params.keys():
             filters_to_offset = self.params.get('filters_to_offset', []) # filters to apply offset
-            zp_offset = np.squeeze(self.zp_offset)
+            zp_offset = np.squeeze(self._zp_offfset)
 
             for i,filt in enumerate(filters):
                 if filt.name in filters_to_offset:
