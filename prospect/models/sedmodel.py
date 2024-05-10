@@ -740,7 +740,7 @@ class PolySpecScreenModel(PolySpecModel):
         ### zero point offset between HST and JWST
         if 'zp_offset' in self.params.keys():
             filters_to_offset = self.params.get('filters_to_offset', []) # filters to apply offset
-            zp_offset = np.squeeze(theta[self.theta_index['zp_offset']])
+            zp_offset = np.squeeze(self.zp_offset)
 
             for i,filt in enumerate(filters):
                 if filt.name in filters_to_offset:
@@ -841,6 +841,10 @@ class PolySpecScreenModel(PolySpecModel):
             _eline_lum_screened = extinction.apply(calzetti,self._eline_lum)
             self._eline_lum = _eline_lum_screened
 
+        if 'zp_offset' in self.params.keys():
+            # store temporarily so that this can be used in predict_phot
+            self._zp_offfset = theta[self.theta_index['zp_offset']]
+            
         # Flux normalize
         self._norm_spec = self._spec * self.flux_norm()
 
